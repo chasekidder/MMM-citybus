@@ -45,7 +45,6 @@ Module.register("MMM-citybus", {
     start: function () {
         var self = this;
         var schedule = null;
-        var DateTime = null;
         var dataNotification = null;
         
 
@@ -61,18 +60,40 @@ Module.register("MMM-citybus", {
     },
 
     getUrl: function () {
-        var proxyBase = "https://withered-bar-1e53.chasekidder.workers.dev";
-        var targetUrl = "https://bus.gocitybus.com/Schedule/GetStopSchedules";
-        var url = proxyBase + "?" + targetUrl;
+        let proxyBase = "https://withered-bar-1e53.chasekidder.workers.dev";
+        let targetUrl = "https://bus.gocitybus.com/Schedule/GetStopSchedules";
+        let url = proxyBase + "?" + targetUrl;
         return url;
     },
 
-    getData: function () {
-        var date = "2020-09-16";
-        var payload = JSON.stringify({ "stopCode": "BUS519W", "date": date });
-        var url = this.getUrl();
+    formatDate: function (date) {
+        let d = new Date(date),
+            month = '' + (d.getMonth() + 1),
+            day = '' + d.getDate(),
+            year = d.getFullYear();
 
-        var httpOptions = {
+        if (month.length < 2) 
+            month = '0' + month;
+        if (day.length < 2) 
+            day = '0' + day;
+
+        return [year, month, day].join('-');
+    
+    },
+
+    formatTime: function (dateISO) {
+        let tzOptions = {hour: '2-digit', minute: '2-digit', hour12: false};
+
+        return new Date(dateISO).toLocaleTimeString([], tzOptions);
+    },
+
+    getData: function () {
+        let date = this.formatDate(Date.now());
+
+        let payload = JSON.stringify({ "stopCode": this.config.stopCode, "date": date });
+        let url = this.getUrl();
+
+        let httpOptions = {
             method: "POST",
             headers: new Headers({ 'content-type': 'application/json' }),
             
@@ -83,49 +104,71 @@ Module.register("MMM-citybus", {
     },
 
     scheduleUpdate: function (delay) {
-        var nextLoad = this.config.updateInterval;
+        let nextLoad = this.config.updateInterval;
         if (typeof delay !== "undefined" && delay >= 0) {
             nextLoad = delay;
         }
         nextLoad = nextLoad;
-        var self = this;
+        let self = this;
         setTimeout(function () {
             self.getData();
         }, nextLoad);
     },
 
+    getClosestArrivals: function () {
+        let now = new Date(Date.now());
+
+        let numberOfArrivals = Object.keys(this.schedule.arrivalTimes).length 
+        let result = [];
+        let next = 0;
+
+        // Search for closest date/time
+        for (let i = 0; i < numberOfArrivals; i++) {
+            let date = new Date(this.schedule.arrivalTimes[i]);
+            if (date > now){
+                next = i;
+                break;
+            }
+        }
+
+        // Get n times after that
+        console.log(next);
+        for (let i = next; i < (next + this.config.numberOfArrivals); i++) {
+            result.push(this.schedule.arrivalTimes[i]);
+        }
+
+        //console.log(result);
+        return result;
+    
+    },
+
     getDom: function () {
-        var self = this;
+        let self = this;
 
         // create element wrapper for show into the module
-        var wrapper = document.createElement("div");
+        let wrapper = document.createElement("div");
 
         if (this.schedule) {
             console.log(this.schedule)
             // Create DIV to contain Route Info
-            var wrapperRouteInfo = document.createElement("div");
+            let wrapperRouteInfo = document.createElement("div");
             wrapperRouteInfo.innerHTML = "Loading Route Information...";
 
             // Create Label for Route Info
-            var labelRouteInfo = document.createElement("label");
+            let labelRouteInfo = document.createElement("label");
             labelRouteInfo.innerHTML = this.schedule.routeName + " " + this.schedule.routeDirection;
 
             wrapper.appendChild(labelRouteInfo);
 
             // Create Table of Bus Arrivals
-            var tableBusArrivalsWrapper = document.createElement("div");
+            let tableBusArrivalsWrapper = document.createElement("div");
 
-            var numberOfArrivals = Object.keys(this.schedule.arrivalTimes).length 
-            var arrivalTimesToShow = [];
-            for (let i = numberOfArrivals; i > (numberOfArrivals - this.config.numberOfArrivals); i--) {
-                arrivalTimesToShow.push(this.schedule.arrivalTimes[i]);
-            }
-
-            arrivalTimesToShow = arrivalTimesToShow.reverse();
-
+            let arrivalTimesToShow = this.getClosestArrivals();
+            
+            // Creat the HTML Objects
             for (let i = 0; i < this.config.numberOfArrivals; i++){
-                var tableBusArrival = document.createElement("div");
-                tableBusArrival.innerHTML = arrivalTimesToShow[i];
+                let tableBusArrival = document.createElement("div");
+                tableBusArrival.innerHTML = this.formatTime(arrivalTimesToShow[i]);
 
                 tableBusArrivalsWrapper.appendChild(tableBusArrival);
             }
@@ -157,23 +200,16 @@ Module.register("MMM-citybus", {
             arrivalTimes: {},
         };
         
-        var numReturnedTimes = Object.keys(rawSchedule.stopTimes).length 
+        let numReturnedTimes = Object.keys(rawSchedule.stopTimes).length 
 
         for (let i = (numReturnedTimes - 1); i > 0; i--) {
-
-            var tzOptions = {hour: '2-digit', minute: '2-digit'};
-
-            var serverTime = new Date(rawSchedule.stopTimes[i].scheduledDepartTimeUtc);
-
-            localTime = serverTime.toLocaleTimeString([], tzOptions);
-
-            this.schedule.arrivalTimes[i] = localTime;
+            this.schedule.arrivalTimes[i] = rawSchedule.stopTimes[i].scheduledDepartTimeUtc;
           };
         
     },
 
     processData: function (data) {
-        var self = this;
+        let self = this;
         if (this.loaded === false) { self.updateDom(self.config.animationSpeed); }
         this.loaded = true;
 
