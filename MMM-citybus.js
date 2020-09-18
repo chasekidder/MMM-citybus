@@ -31,7 +31,8 @@
 
 Module.register("MMM-citybus", {
     defaults: {
-        updateInterval: 60000,
+        //updateInterval: 60000,
+        updateInterval: 900000,
         retryDelay: 30000,
         stopCode: 'BUS519W',
         numberOfArrivals: 3,
@@ -45,8 +46,9 @@ Module.register("MMM-citybus", {
     start: function () {
         var self = this;
         var schedule = null;
+        var nearestEstimate = null;
         var dataNotification = null;
-        
+
 
         //Flag for check if module is loaded
         this.loaded = false;
@@ -55,15 +57,7 @@ Module.register("MMM-citybus", {
         this.getData();
         setInterval(function () {
             self.updateDom();
-            console.log("Updating!");
         }, this.config.updateInterval);
-    },
-
-    getUrl: function () {
-        let proxyBase = "https://withered-bar-1e53.chasekidder.workers.dev";
-        let targetUrl = "https://bus.gocitybus.com/Schedule/GetStopSchedules";
-        let url = proxyBase + "?" + targetUrl;
-        return url;
     },
 
     formatDate: function (date) {
@@ -72,35 +66,62 @@ Module.register("MMM-citybus", {
             day = '' + d.getDate(),
             year = d.getFullYear();
 
-        if (month.length < 2) 
+        if (month.length < 2)
             month = '0' + month;
-        if (day.length < 2) 
+        if (day.length < 2)
             day = '0' + day;
 
         return [year, month, day].join('-');
-    
+
     },
 
     formatTime: function (dateISO) {
-        let tzOptions = {hour: '2-digit', minute: '2-digit', hour12: false};
+        let tzOptions = { hour: '2-digit', minute: '2-digit', hour12: false };
 
         return new Date(dateISO).toLocaleTimeString([], tzOptions);
     },
 
-    getData: function () {
-        let date = this.formatDate(Date.now());
+    getUrl: function (targetUrl) {
+        let proxyBase = "https://withered-bar-1e53.chasekidder.workers.dev";
+        let url = proxyBase + "?" + targetUrl;
+        return url;
+    },
 
-        let payload = JSON.stringify({ "stopCode": this.config.stopCode, "date": date });
-        let url = this.getUrl();
-
+    sendRequest: function (url, payload, type) {
         let httpOptions = {
             method: "POST",
             headers: new Headers({ 'content-type': 'application/json' }),
-            
+
         };
         httpOptions.body = payload;
 
-        fetch(url, httpOptions).then(response => response.text()).then(data => {this.processData(data)});
+        fetch(url, httpOptions).then(response => response.text()).then(data => { this.processData(data, type) });
+
+    },
+
+    getArrivalSchedule: function () {
+        let date = this.formatDate(Date.now());
+
+        let url = this.getUrl("https://bus.gocitybus.com/Schedule/GetStopSchedules");
+        let payload = JSON.stringify({ "stopCode": this.config.stopCode, "date": date });
+
+        this.sendRequest(url, payload, "schedule");
+    },
+
+    getArrivalEstimates: function () {
+        let date = this.formatDate(Date.now());
+
+        let url = this.getUrl("https://bus.gocitybus.com/Schedule/GetStopEstimates");
+        let payload = JSON.stringify({ "stopCode": this.config.stopCode, "date": date });
+
+        this.sendRequest(url, payload, "estimate");
+    },
+
+    getData: function () {
+        this.getArrivalSchedule();
+        this.getArrivalEstimates();
+        this.scheduleUpdate();
+
     },
 
     scheduleUpdate: function (delay) {
@@ -111,35 +132,35 @@ Module.register("MMM-citybus", {
         nextLoad = nextLoad;
         let self = this;
         setTimeout(function () {
+
             self.getData();
+
         }, nextLoad);
     },
 
     getClosestArrivals: function () {
         let now = new Date(Date.now());
 
-        let numberOfArrivals = Object.keys(this.schedule.arrivalTimes).length 
+        let numberOfArrivals = Object.keys(this.schedule.arrivalTimes).length
         let result = [];
         let next = 0;
 
         // Search for closest date/time
         for (let i = 0; i < numberOfArrivals; i++) {
             let date = new Date(this.schedule.arrivalTimes[i]);
-            if (date > now){
+            if (date > now) {
                 next = i;
                 break;
             }
         }
 
         // Get n times after that
-        console.log(next);
         for (let i = next; i < (next + this.config.numberOfArrivals); i++) {
             result.push(this.schedule.arrivalTimes[i]);
         }
 
-        //console.log(result);
         return result;
-    
+
     },
 
     getDom: function () {
@@ -147,28 +168,45 @@ Module.register("MMM-citybus", {
 
         // create element wrapper for show into the module
         let wrapper = document.createElement("div");
+        wrapper.classList.add("citybus-module-wrapper");
 
         if (this.schedule) {
-            console.log(this.schedule)
-            // Create DIV to contain Route Info
-            let wrapperRouteInfo = document.createElement("div");
-            wrapperRouteInfo.innerHTML = "Loading Route Information...";
 
             // Create Label for Route Info
             let labelRouteInfo = document.createElement("label");
+            labelRouteInfo.classList.add("route-info-label");
             labelRouteInfo.innerHTML = this.schedule.routeName + " " + this.schedule.routeDirection;
 
             wrapper.appendChild(labelRouteInfo);
 
             // Create Table of Bus Arrivals
             let tableBusArrivalsWrapper = document.createElement("div");
+            tableBusArrivalsWrapper.classList.add("arrival-wrapper");
 
             let arrivalTimesToShow = this.getClosestArrivals();
-            
-            // Creat the HTML Objects
-            for (let i = 0; i < this.config.numberOfArrivals; i++){
+
+            // Create the HTML Objects
+            for (let i = 0; i < this.config.numberOfArrivals; i++) {
                 let tableBusArrival = document.createElement("div");
-                tableBusArrival.innerHTML = this.formatTime(arrivalTimesToShow[i]);
+                tableBusArrival.classList.add("arrival");
+
+                if ((i === 0) && (this.nearestEstimate)) {
+                    tableBusArrival.innerHTML = this.nearestEstimate;
+                }
+
+                else {
+                    let time = this.formatTime(arrivalTimesToShow[i]);
+
+                    if (time == "Invalid Date") {
+                        tableBusArrival.innerHTML = "";
+                    }
+
+                    else {
+                        tableBusArrival.innerHTML = time;
+                    }
+
+                }
+
 
                 tableBusArrivalsWrapper.appendChild(tableBusArrival);
             }
@@ -180,13 +218,13 @@ Module.register("MMM-citybus", {
         return wrapper;
     },
 
-    getScripts: function() {
-		return [];
-	},
+    getScripts: function () {
+        return [];
+    },
 
     getStyles: function () {
         return [
-            "css/MMM-citybus.css",
+            //"modules/MMM-citybus/css/MMM-citybus.css",
         ];
     },
 
@@ -199,34 +237,46 @@ Module.register("MMM-citybus", {
             stopCode: this.config.stopCode,
             arrivalTimes: {},
         };
-        
-        let numReturnedTimes = Object.keys(rawSchedule.stopTimes).length 
+
+        let numReturnedTimes = Object.keys(rawSchedule.stopTimes).length
 
         for (let i = (numReturnedTimes - 1); i > 0; i--) {
             this.schedule.arrivalTimes[i] = rawSchedule.stopTimes[i].scheduledDepartTimeUtc;
-          };
-        
+        };
+
     },
 
-    processData: function (data) {
+    parseEstimate: function (rawEstimate) {
+        rawEstimate = rawEstimate.routeStopSchedules[0]
+
+        this.nearestEstimate = this.formatTime(rawEstimate.stopTimes[0].estimatedDepartTimeUtc);
+    },
+
+    processData: function (data, type) {
         let self = this;
         if (this.loaded === false) { self.updateDom(self.config.animationSpeed); }
         this.loaded = true;
 
-        self.parseSchedule(JSON.parse(data));
+        if (type === "schedule") {
+            self.parseSchedule(JSON.parse(data));
+        }
+        else if (type === "estimate") {
+            self.parseEstimate(JSON.parse(data));
+        }
+
 
         self.updateDom();
 
     },
 
     // socketNotificationReceived from helper
-	socketNotificationReceived: function (notification, payload) {
-		if(notification === "MMM-citybus-GOT-LOCAL-TIME") {
-			// set dataNotification
-			this.dataNotification = payload;
-			this.updateDom();
-		}
-	},
+    socketNotificationReceived: function (notification, payload) {
+        if (notification === "MMM-citybus-GOT-LOCAL-TIME") {
+            // set dataNotification
+            this.dataNotification = payload;
+            this.updateDom();
+        }
+    },
 
 
 });
